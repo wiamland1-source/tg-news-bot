@@ -1,1 +1,23 @@
+name: ВЭД пост (12:00 МСК)
 
+"on":
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests feedparser beautifulsoup4 anthropic lxml -q
+      - run: python tg_news_bot/news_bot.py ved
+        env:
+          BOT_TOKEN:         ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID:        ${{ secrets.CHANNEL_ID }}
+          REVIEWER_CHAT_ID:  ${{ secrets.REVIEWER_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
