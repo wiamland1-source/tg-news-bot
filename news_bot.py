@@ -293,11 +293,25 @@ def send_draft(post_text, topic_label, prefix=""):
     return result.get("result", {}).get("message_id")
 
 
+def drain_old_updates():
+    """Сбросить все накопившиеся старые апдейты перед началом ожидания."""
+    result = tg("getUpdates", {"offset": -1, "timeout": 0}, timeout=10)
+    updates = result.get("result", [])
+    if updates:
+        last_id = updates[-1]["update_id"]
+        tg("getUpdates", {"offset": last_id + 1, "timeout": 0}, timeout=10)
+        print(f"  [drain] Сброшено старых апдейтов: {len(updates)}", flush=True)
+
+
 def wait_for_decision(timeout_hours=4):
     """Ждать решения ревьюера через polling. Возвращает 'approve', 'reject' или 'timeout'."""
+    # Сначала дренируем все накопившиеся старые нажатия кнопок
+    drain_old_updates()
+
     deadline = time.time() + timeout_hours * 3600
     offset = 0
     poll_timeout = 25  # секунд для Telegram long polling
+    start_time = time.time()
 
     print(f"  Ожидаю решение (до {timeout_hours}ч)...", flush=True)
 
@@ -307,7 +321,7 @@ def wait_for_decision(timeout_hours=4):
                 "offset": offset,
                 "timeout": poll_timeout,
                 "allowed_updates": ["callback_query"]
-            }, timeout=poll_timeout + 10)  # requests timeout чуть больше Telegram timeout
+            }, timeout=poll_timeout + 10)
         except Exception as e:
             print(f"  [polling] Ошибка: {e}, retry...")
             time.sleep(3)
@@ -316,7 +330,14 @@ def wait_for_decision(timeout_hours=4):
         for upd in result.get("result", []):
             offset = upd["update_id"] + 1
             cb = upd.get("callback_query")
-            if cb and str(cb["from"]["id"]) == str(REVIEWER_ID):
+            if not cb:
+                continue
+            # Игнорируем callbacks старше 60 секунд до старта бота
+            cb_time = cb.get("message", {}).get("date", 0)
+            if cb_time and cb_time < start_time - 60:
+                print(f"  [drain] Пропущен старый callback (возраст {int(start_time - cb_time)}с)")
+                continue
+            if str(cb["from"]["id"]) == str(REVIEWER_ID):
                 tg("answerCallbackQuery", {"callback_query_id": cb["id"]})
                 decision = cb["data"]
                 print(f"  Получено решение: {decision}", flush=True)
