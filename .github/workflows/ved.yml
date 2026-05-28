@@ -1,6 +1,6 @@
 name: ВЭД пост (12:00 МСК)
 
-"on":
+on:
   schedule:
     - cron: '0 9 * * *'
   workflow_dispatch:
