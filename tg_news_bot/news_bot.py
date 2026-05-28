@@ -258,16 +258,17 @@ def tg(method, data=None):
         return {}
 
 
-def send_draft(post_text, topic_label):
+def send_draft(post_text, topic_label, prefix=""):
     """Отправить черновик ревьюеру с кнопками одобрения."""
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
-    header = f"📝 *Черновик поста — {topic_label}*\n_Создан: {now}_\n\n"
-    footer = "\n\n─────────────────\n_Нажми кнопку для принятия решения:_"
+    prefix_line = f"{prefix}\n" if prefix else ""
+    header = f"📝 <b>Черновик — {topic_label}</b>\n<i>{prefix_line}Создан: {now}</i>\n\n"
+    footer = "\n\n─────────────────\n<i>Нажми кнопку:</i>"
 
     markup = {
         "inline_keyboard": [[
             {"text": "✅ Опубликовать", "callback_data": "approve"},
-            {"text": "❌ Отклонить",    "callback_data": "reject"}
+            {"text": "❌ Другой вариант", "callback_data": "reject"}
         ]]
     }
 
@@ -349,49 +350,73 @@ def main():
         notify(msg)
         return
 
-    # 2. Выбор лучшей
+    # 2. Сортируем все статьи по score
     print("2. Оцениваю вовлечённость...")
-    best = pick_best_article(articles)
-    print(f"   Выбрана: {best['title'][:80]}")
-    print(f"   Источник: {best['source']} | Score: {best['score']}")
+    for a in articles:
+        a["score"] = score_article(a)
+    articles.sort(key=lambda x: x["score"], reverse=True)
+    print(f"   Отсортировано {len(articles)} статей")
 
-    # 3. Генерация поста
-    print("3. Генерирую пост...")
-    post = generate_post(best, topic_key)
-    print(f"   Пост готов ({len(post)} символов)")
+    # 3. Цикл: генерируем → отправляем → ждём решения
+    used_links = set()
+    attempt = 0
 
-    # 4. Отправка на одобрение
-    print("4. Отправляю черновик ревьюеру...")
-    msg_id = send_draft(post, topic["label"])
-    if not msg_id:
-        print("   ❌ Не удалось отправить черновик!")
-        return
-    print(f"   Отправлено (message_id={msg_id})")
+    for article in articles:
+        if article["link"] in used_links:
+            continue
+        used_links.add(article["link"])
+        attempt += 1
 
-    # 5. Ожидание решения
-    decision = wait_for_decision(timeout_hours=4)
-    print(f"\n5. Решение: {decision}")
+        print(f"\n--- Попытка {attempt} ---")
+        print(f"   Статья: {article['title'][:80]}")
+        print(f"   Источник: {article['source']} | Score: {article['score']}")
 
-    if decision == "approve":
-        ok = publish(post)
-        if ok:
-            print(f"   ✅ Пост опубликован в {CHANNEL_ID}")
-            notify(f"✅ Пост «{topic['label']}» опубликован в {CHANNEL_ID}")
-        else:
-            print("   ❌ Ошибка публикации")
-            notify("❌ Ошибка при публикации. Проверь права бота в канале.")
+        print("   Генерирую пост...")
+        post = generate_post(article, topic_key)
+        print(f"   Пост готов ({len(post)} символов)")
 
-    elif decision == "reject":
-        print("   🗑️ Пост отклонён")
-        notify(f"🗑️ Пост «{topic['label']}» отклонён — не опубликован.")
+        print("   Отправляю черновик ревьюеру...")
+        prefix = f"📄 Вариант {attempt}" if attempt > 1 else ""
+        msg_id = send_draft(post, topic["label"], prefix)
+        if not msg_id:
+            print("   ❌ Не удалось отправить черновик!")
+            continue
+        print(f"   Отправлено (message_id={msg_id})")
 
-    else:
-        print("   ⏰ Время ожидания истекло")
-        notify(
-            f"⏰ Время ожидания истекло (4ч).\n"
-            f"Пост «{topic['label']}» не опубликован."
-        )
+        decision = wait_for_decision(timeout_hours=4)
+        print(f"   Решение: {decision}")
 
+        if decision == "approve":
+            ok = publish(post)
+            if ok:
+                print(f"   ✅ Пост опубликован в {CHANNEL_ID}")
+                notify(f"✅ Пост «{topic['label']}» (вариант {attempt}) опубликован в {CHANNEL_ID}")
+            else:
+                print("   ❌ Ошибка публикации")
+                notify("❌ Ошибка при публикации. Проверь права бота в канале.")
+            print("\nГотово.\n")
+            return
+
+        elif decision == "reject":
+            remaining = len(articles) - attempt
+            if remaining > 0:
+                notify(f"🔄 Генерирую новый вариант ({remaining} статей осталось)...")
+                print(f"   Отклонён. Пробую следующую статью...")
+            else:
+                notify(f"😔 Все {attempt} варианты отклонены — больше статей нет.")
+                print("   Все статьи использованы.")
+                print("\nГотово.\n")
+                return
+
+        else:  # timeout
+            notify(
+                f"⏰ Время ожидания истекло (4ч).\n"
+                f"Пост «{topic['label']}» не опубликован."
+            )
+            print("\nГотово.\n")
+            return
+
+    notify(f"😔 Все варианты отклонены — новых статей по теме «{topic['label']}» нет.")
     print("\nГотово.\n")
 
 
